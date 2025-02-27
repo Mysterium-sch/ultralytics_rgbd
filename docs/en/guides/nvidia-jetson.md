@@ -360,7 +360,7 @@ The below table represents the benchmark results for five different models (YOLO
 
 #### NVIDIA Jetson Orin Nano Super Developer Kit
 
-!!! tip "Performance"
+!!! performance
 
     === "YOLO11n"
 
@@ -456,7 +456,7 @@ The below table represents the benchmark results for five different models (YOLO
 
 #### NVIDIA Jetson Orin NX 16GB
 
-!!! tip "Performance"
+!!! performance
 
     === "YOLO11n"
 

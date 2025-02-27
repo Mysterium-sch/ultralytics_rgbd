@@ -14,7 +14,7 @@ import numpy as np
 import psutil
 from torch.utils.data import Dataset
 
-from ultralytics.data.utils import FORMATS_HELP_MSG, HELP_URL, IMG_FORMATS
+from ultralytics.data.utils import FORMATS_HELP_MSG, HELP_URL, IMG_FORMATS, DEPTH_FORMATS
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, NUM_THREADS, TQDM
 
 
@@ -48,7 +48,7 @@ class BaseDataset(Dataset):
 
     def __init__(
         self,
-        img_path,
+        path,
         imgsz=640,
         cache=False,
         augment=True,
@@ -64,13 +64,14 @@ class BaseDataset(Dataset):
     ):
         """Initialize BaseDataset with given configuration and options."""
         super().__init__()
-        self.img_path = img_path
+        self.path = path
         self.imgsz = imgsz
         self.augment = augment
         self.single_cls = single_cls
         self.prefix = prefix
         self.fraction = fraction
-        self.im_files = self.get_img_files(self.img_path)
+        self.im_files = self.get_img_files(self.path)
+        self.depth_files = self.get_de_files(self.path)
         self.labels = self.get_labels()
         self.update_labels(include_class=classes)  # single_cls and include_class
         self.ni = len(self.labels)  # number of images
@@ -86,9 +87,12 @@ class BaseDataset(Dataset):
         self.buffer = []  # buffer size = batch size
         self.max_buffer_length = min((self.ni, self.batch_size * 8, 1000)) if self.augment else 0
 
+
         # Cache images (options are cache = True, False, None, "ram", "disk")
         self.ims, self.im_hw0, self.im_hw = [None] * self.ni, [None] * self.ni, [None] * self.ni
-        self.npy_files = [Path(f).with_suffix(".npy") for f in self.im_files]
+        self.des, self.de_hw0, self.de_hw = [None] * self.ni, [None] * self.ni, [None] * self.ni
+        self.im_npy_files = [Path(f).with_suffix(".npy") for f in self.im_files]
+        self.de_npy_files = [Path(f).with_suffix(".npy") for f in self.depth_files]
         self.cache = cache.lower() if isinstance(cache, str) else "ram" if cache is True else None
         if self.cache == "ram" and self.check_cache_ram():
             if hyp.deterministic:
@@ -97,8 +101,10 @@ class BaseDataset(Dataset):
                     "Consider cache='disk' as a deterministic alternative if your disk space allows."
                 )
             self.cache_images()
+            self.cache_depths()
         elif self.cache == "disk" and self.check_cache_disk():
             self.cache_images()
+            self.cache_depths()
 
         # Transforms
         self.transforms = self.build_transforms(hyp=hyp)
@@ -128,6 +134,32 @@ class BaseDataset(Dataset):
         if self.fraction < 1:
             im_files = im_files[: round(len(im_files) * self.fraction)]  # retain a fraction of the dataset
         return im_files
+    
+    def get_de_files(self, de_path):
+        """Read image files."""
+        try:
+            f = []  # image files
+            for p in de_path if isinstance(de_path, list) else [de_path]:
+                p = Path(p)  # os-agnostic
+                if p.is_dir():  # dir
+                    f += glob.glob(str(p / "**" / "*.*"), recursive=True)
+                    # F = list(p.rglob('*.*'))  # pathlib
+                elif p.is_file():  # file
+                    with open(p) as t:
+                        t = t.read().strip().splitlines()
+                        parent = str(p.parent) + os.sep
+                        f += [x.replace("./", parent) if x.startswith("./") else x for x in t]  # local to global path
+                        # F += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
+                else:
+                    raise FileNotFoundError(f"{self.prefix}{p} does not exist")
+            de_paths = sorted(x.replace("/", os.sep) for x in f if x.split(".")[-1].lower() in DEPTH_FORMATS)
+            # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in IMG_FORMATS])  # pathlib
+            assert de_paths, f"{self.prefix}No depth found in {de_path}. {FORMATS_HELP_MSG}"
+        except Exception as e:
+            raise FileNotFoundError(f"{self.prefix}Error loading data from {de_path}\n{HELP_URL}") from e
+        if self.fraction < 1:
+            de_paths = de_paths[: round(len(de_paths) * self.fraction)]  # retain a fraction of the dataset
+        return de_paths
 
     def update_labels(self, include_class: Optional[list]):
         """Update labels to include only these classes (optional)."""
@@ -150,7 +182,7 @@ class BaseDataset(Dataset):
 
     def load_image(self, i, rect_mode=True):
         """Loads 1 image from dataset index 'i', returns (im, resized hw)."""
-        im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i]
+        im, f, fn = self.ims[i], self.im_files[i], self.im_npy_files[i]
         if im is None:  # not cached in RAM
             if fn.exists():  # load npy
                 try:
@@ -186,6 +218,36 @@ class BaseDataset(Dataset):
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]
 
+    def load_depth(self, i, rect_mode=True):
+        """Loads 1 image from dataset index 'i', returns (im, resized hw)."""
+        de, f, fn = self.des[i], self.depth_files[i], self.de_npy_files[i]
+        if de is None:  # not cached in RAM
+            de = np.load(f)  # BGR
+            if de is None:
+                raise FileNotFoundError(f"Image Not Found {f}")
+
+            h0, w0 = de.shape[:2]  # orig hw
+            if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
+                r = self.imgsz / max(h0, w0)  # ratio
+                if r != 1:  # if sizes are not equal
+                    w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
+                    de = cv2.resize(de, (w, h), interpolation=cv2.INTER_LINEAR)
+            elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
+                de = cv2.resize(de, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+
+            # Add to buffer if training with augmentations
+            if self.augment:
+                self.des[i], self.de_hw0[i], self.de_hw[i] = de, (h0, w0), de.shape[:2]  # im, hw_original, hw_resized
+                self.buffer.append(i)
+                if 1 < len(self.buffer) >= self.max_buffer_length:  # prevent empty buffer
+                    j = self.buffer.pop(0)
+                    if self.cache != "ram":
+                        self.des[j], self.de_hw0[j], self.de_hw[j] = None, None, None
+
+            return de, (h0, w0), de.shape[:2]
+
+        return self.des[i], self.de_hw0[i], self.de_hw[i]
+
     def cache_images(self):
         """Cache images to memory or disk."""
         b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
@@ -195,18 +257,40 @@ class BaseDataset(Dataset):
             pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
             for i, x in pbar:
                 if self.cache == "disk":
-                    b += self.npy_files[i].stat().st_size
+                    b += self.im_npy_files[i].stat().st_size
                 else:  # 'ram'
                     self.ims[i], self.im_hw0[i], self.im_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
                     b += self.ims[i].nbytes
                 pbar.desc = f"{self.prefix}Caching images ({b / gb:.1f}GB {storage})"
             pbar.close()
 
+    def cache_depths(self):
+        """Cache images to memory or disk."""
+        b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
+        fcn, storage = (self.cache_depths_to_disk, "Disk") if self.cache == "disk" else (self.load_depth, "RAM")
+        with ThreadPool(NUM_THREADS) as pool:
+            results = pool.imap(fcn, range(self.ni))
+            pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
+            for i, x in pbar:
+                if self.cache == "disk":
+                    b += self.de_npy_files[i].stat().st_size
+                else:  # 'ram'
+                    self.des[i], self.de_hw0[i], self.de_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
+                    b += self.des[i].nbytes
+                pbar.desc = f"{self.prefix}Caching images ({b / gb:.1f}GB {storage})"
+            pbar.close()
+
     def cache_images_to_disk(self, i):
         """Saves an image as an *.npy file for faster loading."""
-        f = self.npy_files[i]
+        f = self.im_npy_files[i]
         if not f.exists():
             np.save(f.as_posix(), cv2.imread(self.im_files[i]), allow_pickle=False)
+
+    def cache_depths_to_disk(self, i):
+        """Saves an image as an *.npy file for faster loading."""
+        f = self.de_npy_files[i]
+        if not f.exists():
+            np.save(f.as_posix(), np.load(self.depth_files[i]), allow_pickle=False)
 
     def check_cache_disk(self, safety_margin=0.5):
         """Check image caching requirements vs available disk space."""
@@ -285,13 +369,17 @@ class BaseDataset(Dataset):
 
     def __getitem__(self, index):
         """Returns transformed label information for given index."""
-        return self.transforms(self.get_image_and_label(index))
-
-    def get_image_and_label(self, index):
+        return self.transforms(self.get_image_depth_and_label(index))
+    
+    def get_image_depth_and_label(self, index):
         """Get and return label information from the dataset."""
         label = deepcopy(self.labels[index])  # requires deepcopy() https://github.com/ultralytics/ultralytics/pull/1948
         label.pop("shape", None)  # shape is for rect, remove it
-        label["img"], label["ori_shape"], label["resized_shape"] = self.load_image(index)
+        img, shape, reshape = self.load_image(index)
+        de, dshape, dreshape = self.load_depth(index)
+        de_expanded = np.expand_dims(de, axis=-1)
+        rgbd = np.concatenate([img, de_expanded], axis=-1)
+        label["img"], label["ori_shape"], label["resized_shape"] = rgbd, shape, reshape
         label["ratio_pad"] = (
             label["resized_shape"][0] / label["ori_shape"][0],
             label["resized_shape"][1] / label["ori_shape"][1],

@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 
 __all__ = (
+    "Silence",
+    "SilenceChannel",
     "Conv",
     "Conv2",
     "LightConv",
@@ -32,6 +34,22 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
+
+class Silence(nn.Module):
+    def __init__(self):
+        super(Silence, self).__init__()
+    def forward(self, x):
+        return x
+
+
+class SilenceChannel(nn.Module):
+    def __init__(self, c_end, c_start):
+        super(SilenceChannel, self).__init__()
+        self.c_start=c_start
+        self.c_end = c_end
+    def forward(self, x):
+        f = x[..., self.c_start:self.c_end, :, :]
+        return f
 
 
 class Conv(nn.Module):

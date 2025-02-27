@@ -13,6 +13,7 @@ from ultralytics.data.dataset import GroundingDataset, YOLODataset, YOLOMultiMod
 from ultralytics.data.loaders import (
     LOADERS,
     LoadImagesAndVideos,
+    LoadImagesAndDepth,
     LoadPilAndNumpy,
     LoadScreenshots,
     LoadStreams,
@@ -20,7 +21,7 @@ from ultralytics.data.loaders import (
     SourceTypes,
     autocast_list,
 )
-from ultralytics.data.utils import IMG_FORMATS, PIN_MEMORY, VID_FORMATS
+from ultralytics.data.utils import IMG_FORMATS, PIN_MEMORY, VID_FORMATS, DEPTH_FORMATS
 from ultralytics.utils import RANK, colorstr
 from ultralytics.utils.checks import check_file
 
@@ -93,11 +94,12 @@ def seed_worker(worker_id):  # noqa
     random.seed(worker_seed)
 
 
-def build_yolo_dataset(cfg, img_path, batch, data, mode="train", rect=False, stride=32, multi_modal=False):
+def build_yolo_dataset(cfg, path, batch, data, mode="train", rect=False, stride=32, multi_modal=False):
     """Build YOLO Dataset."""
+    print(path)
     dataset = YOLOMultiModalDataset if multi_modal else YOLODataset
     return dataset(
-        img_path=img_path,
+        path=path,
         imgsz=cfg.imgsz,
         batch_size=batch,
         augment=mode == "train",  # augmentation
@@ -159,15 +161,27 @@ def build_dataloader(dataset, batch, workers, shuffle=True, rank=-1):
 
 def check_source(source):
     """Check source type and return corresponding flag values."""
-    webcam, screenshot, from_img, in_memory, tensor = False, False, False, False, False
+    webcam, screenshot, from_img, wth_depth, in_memory, tensor = False, False, False, False, False, False
+    
+    # Handle file or URL sources
     if isinstance(source, (str, int, Path)):  # int for local usb camera
         source = str(source)
-        is_file = Path(source).suffix[1:] in (IMG_FORMATS | VID_FORMATS)
+        is_file = Path(source).suffix[1:] in (IMG_FORMATS | VID_FORMATS | DEPTH_FORMATS)
         is_url = source.lower().startswith(("https://", "http://", "rtsp://", "rtmp://", "tcp://"))
         webcam = source.isnumeric() or source.endswith(".streams") or (is_url and not is_file)
         screenshot = source.lower() == "screen"
+        
+        if Path(source).is_dir():
+            files = list(Path(source).glob('*'))
+            has_npy = any(f.suffix == '.npy' for f in files)
+            has_png = any(f.suffix == '.png' for f in files)
+            if has_npy and has_png:
+                wth_depth = True
+        
         if is_url and is_file:
             source = check_file(source)  # download
+
+    # Handle in-memory or image sources
     elif isinstance(source, LOADERS):
         in_memory = True
     elif isinstance(source, (list, tuple)):
@@ -180,7 +194,7 @@ def check_source(source):
     else:
         raise TypeError("Unsupported image type. For supported types see https://docs.ultralytics.com/modes/predict")
 
-    return source, webcam, screenshot, from_img, in_memory, tensor
+    return source, webcam, screenshot, from_img, wth_depth, in_memory, tensor
 
 
 def load_inference_source(source=None, batch=1, vid_stride=1, buffer=False):
@@ -196,7 +210,7 @@ def load_inference_source(source=None, batch=1, vid_stride=1, buffer=False):
     Returns:
         dataset (Dataset): A dataset object for the specified input source.
     """
-    source, stream, screenshot, from_img, in_memory, tensor = check_source(source)
+    source, stream, screenshot, from_img, wth_depth, in_memory, tensor = check_source(source)
     source_type = source.source_type if in_memory else SourceTypes(stream, screenshot, from_img, tensor)
 
     # Dataloader
@@ -210,6 +224,8 @@ def load_inference_source(source=None, batch=1, vid_stride=1, buffer=False):
         dataset = LoadScreenshots(source)
     elif from_img:
         dataset = LoadPilAndNumpy(source)
+    elif wth_depth:
+        dataset = LoadImagesAndDepth(source, batch=batch, vid_stride=vid_stride)
     else:
         dataset = LoadImagesAndVideos(source, batch=batch, vid_stride=vid_stride)
 

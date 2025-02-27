@@ -171,7 +171,14 @@ class Annotator:
         self.pil = pil or non_ascii or input_is_pil
         self.lw = line_width or max(round(sum(im.size if input_is_pil else im.shape) / 2 * 0.003), 2)
         if self.pil:  # use PIL
-            self.im = im if input_is_pil else Image.fromarray(im)
+            #self.im_rgbd = im if input_is_pil else Image.fromarray(im)
+            rgb = im[:, :, :3]
+            d = im[:, :, 3]
+            d_colormap = cv2.applyColorMap(d, cv2.COLORMAP_JET)
+            alpha = 0.4  # Transparency for blending
+            rgb_with_depth = cv2.addWeighted(rgb, 1 - alpha, d_colormap, alpha, 0)
+            self.im = Image.fromarray(rgb_with_depth)
+
             self.draw = ImageDraw.Draw(self.im)
             try:
                 font = check_font("Arial.Unicode.ttf" if non_ascii else font)
@@ -1025,7 +1032,7 @@ def plot_images(
     Plot image grid with labels, bounding boxes, masks, and keypoints.
 
     Args:
-        images: Batch of images to plot. Shape: (batch_size, channels, height, width).
+        images: Batch of images to plot. Shape: (batch_size, channels, height, width), where channels can be 3 or 4.
         batch_idx: Batch indices for each detection. Shape: (num_detections,).
         cls: Class labels for each detection. Shape: (num_detections,).
         bboxes: Bounding boxes for each detection. Shape: (num_detections, 4) or (num_detections, 5) for rotated boxes.
@@ -1043,10 +1050,6 @@ def plot_images(
 
     Returns:
         np.ndarray: Plotted image grid as a numpy array if save is False, None otherwise.
-
-    Note:
-        This function supports both tensor and numpy array inputs. It will automatically
-        convert tensor inputs to numpy arrays for processing.
     """
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
@@ -1061,14 +1064,14 @@ def plot_images(
     if isinstance(batch_idx, torch.Tensor):
         batch_idx = batch_idx.cpu().numpy()
 
-    bs, _, h, w = images.shape  # batch size, _, height, width
+    bs, _, h, w = images.shape  # batch size, channels, height, width
     bs = min(bs, max_subplots)  # limit plot images
     ns = np.ceil(bs**0.5)  # number of subplots (square)
     if np.max(images[0]) <= 1:
         images *= 255  # de-normalise (optional)
 
-    # Build Image
-    mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)  # init
+    # Build Image (adjust for 4-channel images)
+    mosaic = np.full((int(ns * h), int(ns * w), 4), 255, dtype=np.uint8)  # init with alpha channel
     for i in range(bs):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         mosaic[y : y + h, x : x + w, :] = images[i].transpose(1, 2, 0)

@@ -15,7 +15,7 @@ import requests
 import torch
 from PIL import Image
 
-from ultralytics.data.utils import FORMATS_HELP_MSG, IMG_FORMATS, VID_FORMATS
+from ultralytics.data.utils import FORMATS_HELP_MSG, IMG_FORMATS, VID_FORMATS, DEPTH_FORMATS
 from ultralytics.utils import IS_COLAB, IS_KAGGLE, LOGGER, ops
 from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.patches import imread
@@ -322,6 +322,7 @@ class LoadImagesAndVideos:
 
     def __init__(self, path, batch=1, vid_stride=1):
         """Initialize dataloader for images and videos, supporting various input formats."""
+        
         parent = None
         if isinstance(path, str) and Path(path).suffix == ".txt":  # *.txt file with img/vid/dir on each line
             parent = Path(path).parent
@@ -442,6 +443,135 @@ class LoadImagesAndVideos:
         if not self.cap.isOpened():
             raise FileNotFoundError(f"Failed to open video {path}")
         self.frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.vid_stride)
+
+    def __len__(self):
+        """Returns the number of files (images and videos) in the dataset."""
+        return math.ceil(self.nf / self.bs)  # number of batches
+
+
+class LoadImagesAndDepth:
+    """
+    A class for loading and processing images and videos for YOLO object detection.
+
+    This class manages the loading and pre-processing of image and video data from various sources, including
+    single image files, video files, and lists of image and video paths.
+
+    Attributes:
+        files (List[str]): List of image and video file paths.
+        nf (int): Total number of files (images and videos).
+        video_flag (List[bool]): Flags indicating whether a file is a video (True) or an image (False).
+        mode (str): Current mode, 'image' or 'video'.
+        vid_stride (int): Stride for video frame-rate.
+        bs (int): Batch size.
+        cap (cv2.VideoCapture): Video capture object for OpenCV.
+        frame (int): Frame counter for video.
+        frames (int): Total number of frames in the video.
+        count (int): Counter for iteration, initialized at 0 during __iter__().
+        ni (int): Number of images.
+
+    Methods:
+        __init__: Initialize the LoadImagesAndDepth object.
+        __iter__: Returns an iterator object for VideoStream or ImageFolder.
+        __next__: Returns the next batch of images or video frames along with their paths and metadata.
+        _new_video: Creates a new video capture object for the given path.
+        __len__: Returns the number of batches in the object.
+
+    Examples:
+        >>> loader = LoadImagesAndDepth("path/to/data", batch=32, vid_stride=1)
+        >>> for paths, imgs, info in loader:
+        ...     # Process batch of images or video frames
+        ...     pass
+
+    Notes:
+        - Supports various image formats including HEIC.
+        - Handles both local files and directories.
+        - Can read from a text file containing paths to images and videos.
+    """
+
+    def __init__(self, path, batch=1, vid_stride=1):
+        """Initialize dataloader for images and videos, supporting various input formats."""
+        
+        parent = None
+        if isinstance(path, str) and Path(path).suffix == ".txt":  # *.txt file with img/vid/dir on each line
+            parent = Path(path).parent
+            path = Path(path).read_text().splitlines()  # list of sources
+        files = []
+        for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
+            a = str(Path(p).absolute())  # do not use .resolve() https://github.com/ultralytics/ultralytics/issues/2912
+            if "*" in a:
+                files.extend(sorted(glob.glob(a, recursive=True)))  # glob
+            elif os.path.isdir(a):
+                files.extend(sorted(glob.glob(os.path.join(a, "*.*"))))  # dir
+            elif os.path.isfile(a):
+                files.append(a)  # files (absolute or relative to CWD)
+            elif parent and (parent / p).is_file():
+                files.append(str((parent / p).absolute()))  # files (relative to *.txt file parent)
+            else:
+                raise FileNotFoundError(f"{p} does not exist")
+
+        # Define files as images or videos
+        images, depth = [], []
+        for f in files:
+            suffix = f.split(".")[-1].lower()  # Get file extension without the dot and lowercase
+            if suffix in IMG_FORMATS:
+                images.append(f)
+            elif suffix in DEPTH_FORMATS:
+                depth.append(f)
+        ni, nv = len(images), len(depth)
+
+        self.im_files = images
+        self.de_files = depth
+        self.nf = ni   # number of files
+        self.ni = ni  # number of images
+        self.nd = nv # number of depth
+        self.video_flag = False
+        self.mode = "video" if ni == 0 else "image"  # default to video if no images
+        self.vid_stride = vid_stride  # video frame-rate stride
+        self.bs = batch
+        self.cap = None
+        if self.nf == 0:
+            raise FileNotFoundError(f"No images or videos found in {p}. {FORMATS_HELP_MSG}")
+
+    def __iter__(self):
+        """Iterates through image/video files, yielding source paths, images, and metadata."""
+        self.count = 0
+        return self
+
+    def __next__(self):
+        """Returns the next batch of images or video frames with their paths and metadata."""
+        im_paths, de_paths, imgs, depths, info = [], [], [], [], []
+        
+        while len(imgs) < self.bs:
+            if self.count >= self.nf:  # end of file list
+                if imgs:
+                    return im_paths, de_paths, imgs, depths, info  # return last partial batch
+                else:
+                    raise StopIteration
+
+            im_path = self.im_files[self.count]
+            de_path = self.de_files[self.count]
+
+            # Handle image files (including HEIC)
+            self.mode = "image"
+            im0 = imread(im_path)  # BGR
+            depth0 = np.load(de_path)
+            
+            if im0 is None or depth0 is None:
+                LOGGER.warning(f"WARNING ⚠️ Image Read Error {im_path}")
+            else:
+                im_paths.append(im_path)
+                de_paths.append(de_path)
+                imgs.append(im0)
+                depths.append(depth0)
+                info.append(f"image {self.count + 1}/{self.nf} {im_path} & depth {self.count + 1}/{self.nf} {de_path}: ")
+            
+            self.count += 1  # move to the next file
+            
+            if self.count >= self.ni:  # end of image list
+                break
+
+        return im_paths, de_paths, imgs, depths, info
+
 
     def __len__(self):
         """Returns the number of files (images and videos) in the dataset."""
@@ -655,4 +785,4 @@ def get_best_youtube_url(url, method="pytube"):
 
 
 # Define constants
-LOADERS = (LoadStreams, LoadPilAndNumpy, LoadImagesAndVideos, LoadScreenshots)
+LOADERS = (LoadStreams, LoadPilAndNumpy, LoadImagesAndVideos, LoadImagesAndDepth, LoadScreenshots)
