@@ -1,4 +1,4 @@
-path: "/home/lixion/stuff/ultralytics/ultralytics/assets/"
+path: "/home/lixion/rgbd/ultra/ultralytics_rgbd/ultralytics/assets/"
 
 train: ["images", "lidar"]
 val: ["images", "lidar"]

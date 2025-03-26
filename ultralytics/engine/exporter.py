@@ -313,7 +313,7 @@ class Exporter:
             raise SystemError("TensorFlow.js export not supported on ARM64 Linux")
 
         # Input
-        im = torch.zeros(self.args.batch, 3, *self.imgsz).to(self.device)
+        im = torch.zeros(self.args.batch, 4, *self.imgsz).to(self.device)
         file = Path(
             getattr(model, "pt_path", None) or getattr(model, "yaml_file", None) or model.yaml.get("yaml_file", "")
         )
@@ -515,10 +515,10 @@ class Exporter:
         dynamic = self.args.dynamic
         if dynamic:
             self.model.cpu()  # dynamic=True only compatible with cpu
-            dynamic = {"images": {0: "batch", 2: "height", 3: "width"}}  # shape(1,3,640,640)
+            dynamic = {"images": {0: "batch", 2: "height", 4: "width"}}  # shape(1,4,640,640)
             if isinstance(self.model, SegmentationModel):
                 dynamic["output0"] = {0: "batch", 2: "anchors"}  # shape(1, 116, 8400)
-                dynamic["output1"] = {0: "batch", 2: "mask_height", 3: "mask_width"}  # shape(1,32,160,160)
+                dynamic["output1"] = {0: "batch", 2: "mask_height", 4: "mask_width"}  # shape(1,32,160,160)
             elif isinstance(self.model, DetectionModel):
                 dynamic["output0"] = {0: "batch", 2: "anchors"}  # shape(1, 84, 8400)
             if self.args.nms:  # only batch size is dynamic with NMS
@@ -731,7 +731,7 @@ class Exporter:
             *pnnx_args,
             f"fp16={int(self.args.half)}",
             f"device={self.device.type}",
-            f'inputshape="{[self.args.batch, 3, *self.imgsz]}"',
+            f'inputshape="{[self.args.batch, 4, *self.imgsz]}"',
         ]
         f.mkdir(exist_ok=True)  # make ncnn_model directory
         LOGGER.info(f"{prefix} running '{' '.join(cmd)}'")
@@ -884,6 +884,7 @@ class Exporter:
 
         if self.args.dynamic:
             shape = self.im.shape
+            print(shape)
             if shape[0] <= 1:
                 LOGGER.warning(f"{prefix} WARNING ⚠️ 'dynamic=True' model requires max batch size, i.e. 'batch=16'")
             profile = builder.create_optimization_profile()
@@ -1464,7 +1465,7 @@ class Exporter:
         # 4. Pipeline models together
         pipeline = ct.models.pipeline.Pipeline(
             input_features=[
-                ("image", ct.models.datatypes.Array(3, ny, nx)),
+                ("image", ct.models.datatypes.Array(4, ny, nx)),
                 ("iouThreshold", ct.models.datatypes.Double()),
                 ("confidenceThreshold", ct.models.datatypes.Double()),
             ],
@@ -1548,7 +1549,7 @@ class NMSModel(torch.nn.Module):
         Performs inference with NMS post-processing. Supports Detect, Segment, OBB and Pose.
 
         Args:
-            x (torch.Tensor): The preprocessed tensor with shape (N, 3, H, W).
+            x (torch.Tensor): The preprocessed tensor with shape (N, 4, H, W).
 
         Returns:
             out (torch.Tensor): The post-processed results with shape (N, max_det, 4 + 2 + extra_shape).
