@@ -1065,13 +1065,14 @@ def plot_images(
         batch_idx = batch_idx.cpu().numpy()
 
     bs, _, h, w = images.shape  # batch size, channels, height, width
+    print(images.shape)
     bs = min(bs, max_subplots)  # limit plot images
     ns = np.ceil(bs**0.5)  # number of subplots (square)
     if np.max(images[0]) <= 1:
         images *= 255  # de-normalise (optional)
 
     # Build Image (adjust for 4-channel images)
-    mosaic = np.full((int(ns * h), int(ns * w), 4), 255, dtype=np.uint8)  # init with alpha channel
+    mosaic = np.full((int(ns * h), int(ns * w), 5), 255, dtype=np.uint8)  # init with alpha channel
     for i in range(bs):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         mosaic[y : y + h, x : x + w, :] = images[i].transpose(1, 2, 0)

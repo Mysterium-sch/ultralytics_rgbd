@@ -377,8 +377,8 @@ class BaseDataset(Dataset):
         label.pop("shape", None)  # shape is for rect, remove it
         img, shape, reshape = self.load_image(index)
         de, dshape, dreshape = self.load_depth(index)
-        de_expanded = np.expand_dims(de, axis=-1)
-        rgbd = np.concatenate([img, de_expanded], axis=-1)
+        #de_expanded = np.expand_dims(de, axis=-1)
+        rgbd = np.concatenate([img, de], axis=-1)
         label["img"], label["ori_shape"], label["resized_shape"] = rgbd, shape, reshape
         label["ratio_pad"] = (
             label["resized_shape"][0] / label["ori_shape"][0],

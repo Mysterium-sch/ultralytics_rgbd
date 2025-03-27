@@ -1368,7 +1368,7 @@ class RandomHSV:
         rgb = img[:, :, :3]
         if rgb.dtype != np.uint8:
             rgb = np.array(rgb, dtype=np.uint8)
-        d = img[:, :, 3]
+        d = img[:, :, 3:]
         if self.hgain or self.sgain or self.vgain:
             r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
             hue, sat, val = cv2.split(cv2.cvtColor(rgb, cv2.COLOR_BGR2HSV))
@@ -1381,8 +1381,8 @@ class RandomHSV:
 
             im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
             rgb = cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR)  # no return needed
-        de_expanded = np.expand_dims(d, axis=-1)
-        rgbd =  np.concatenate([rgb, de_expanded], axis=-1)
+        #de_expanded = np.expand_dims(d, axis=-1)
+        rgbd =  np.concatenate([rgb, d], axis=-1)
         labels["img"] = rgbd
         return labels
 
@@ -1593,9 +1593,22 @@ class LetterBox:
             img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
         top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
         left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
-        img = cv2.copyMakeBorder(
-            img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
-        )  # add border
+
+        if img.shape[2] >= 5:
+            rgb = cv2.copyMakeBorder(
+                img[:, :, :4], top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114, 114)
+            )  # add border
+            d = cv2.copyMakeBorder(
+                img[:, :, 4], top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114)
+            )  # add border
+
+            de_expanded = np.expand_dims(d, axis=-1)
+            img = np.concatenate([rgb, de_expanded], axis=-1)
+
+        else:
+            img = cv2.copyMakeBorder(
+                img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+            )  # add border
         if labels.get("ratio_pad"):
             labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
 
