@@ -1382,6 +1382,7 @@ class RandomHSV:
             im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
             rgb = cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR)  # no return needed
         de_expanded = np.expand_dims(d, axis=-1)
+        print(de_expanded.shape)
         rgbd =  np.concatenate([rgb, de_expanded], axis=-1)
         labels["img"] = rgbd
         return labels

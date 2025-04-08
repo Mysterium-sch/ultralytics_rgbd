@@ -3,7 +3,8 @@ warnings.filterwarnings('ignore')
 from ultralytics import YOLO
 
 if __name__ == '__main__':
-    model = YOLO('ultralytics/cfg/models/v8/yolov8_late.yaml')
+    model = YOLO('ultralytics/cfg/models/v8/yolov8_mid.yaml')
+
     
     # Train the model
     model.train(data=R'ultralytics/cfg/datasets/base.yaml',
