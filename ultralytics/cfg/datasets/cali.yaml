@@ -1,0 +1,12 @@
+path: "/home/lixion/rgbd/ultra/ultralytics_rgbd/comp"
+
+train: ["images", "lidar"]
+val: ["images", "lidar"]
+
+channels: 4
+
+names:
+    0: person
+    1: bicycle
+    2: car
+    3: don't care

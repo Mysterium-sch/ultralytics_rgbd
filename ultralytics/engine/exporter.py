@@ -313,7 +313,7 @@ class Exporter:
             raise SystemError("TensorFlow.js export not supported on ARM64 Linux")
 
         # Input
-        im = torch.zeros(self.args.batch, 4, *self.imgsz).to(self.device)
+        im = torch.zeros(self.args.batch, 5, *self.imgsz).to(self.device)
         file = Path(
             getattr(model, "pt_path", None) or getattr(model, "yaml_file", None) or model.yaml.get("yaml_file", "")
         )
@@ -515,10 +515,10 @@ class Exporter:
         dynamic = self.args.dynamic
         if dynamic:
             self.model.cpu()  # dynamic=True only compatible with cpu
-            dynamic = {"images": {0: "batch", 2: "height", 4: "width"}}  # shape(1,4,640,640)
+            dynamic = {"images": {0: "batch", 2: "height", 5: "width"}}  # shape(1,4,640,640)
             if isinstance(self.model, SegmentationModel):
                 dynamic["output0"] = {0: "batch", 2: "anchors"}  # shape(1, 116, 8400)
-                dynamic["output1"] = {0: "batch", 2: "mask_height", 4: "mask_width"}  # shape(1,32,160,160)
+                dynamic["output1"] = {0: "batch", 2: "mask_height", 5: "mask_width"}  # shape(1,32,160,160)
             elif isinstance(self.model, DetectionModel):
                 dynamic["output0"] = {0: "batch", 2: "anchors"}  # shape(1, 84, 8400)
             if self.args.nms:  # only batch size is dynamic with NMS
@@ -731,7 +731,7 @@ class Exporter:
             *pnnx_args,
             f"fp16={int(self.args.half)}",
             f"device={self.device.type}",
-            f'inputshape="{[self.args.batch, 4, *self.imgsz]}"',
+            f'inputshape="{[self.args.batch, 5, *self.imgsz]}"',
         ]
         f.mkdir(exist_ok=True)  # make ncnn_model directory
         LOGGER.info(f"{prefix} running '{' '.join(cmd)}'")
@@ -1030,19 +1030,19 @@ class Exporter:
                     0, 2, 3, 1
                 )
                 np.save(str(tmp_file), images.numpy().astype(np.float32))  # BHWC
-                np_data = [["images", tmp_file, [[[[0, 0, 0]]]], [[[[255, 255, 255]]]]]]
+                np_data = [["images", tmp_file, [[[[0, 0, 0, 0, 0]]]], [[[[255, 255, 255, 255, 255]]]]]]
 
         LOGGER.info(f"{prefix} starting TFLite export with onnx2tf {onnx2tf.__version__}...")
         keras_model = onnx2tf.convert(
-            input_onnx_file_path=f_onnx,
-            output_folder_path=str(f),
-            not_use_onnxsim=True,
-            verbosity="error",  # note INT8-FP16 activation bug https://github.com/ultralytics/ultralytics/issues/15873
-            output_integer_quantized_tflite=self.args.int8,
-            quant_type="per-tensor",  # "per-tensor" (faster) or "per-channel" (slower but more accurate)
-            custom_input_op_name_np_data_path=np_data,
-            disable_group_convolution=True,  # for end-to-end model compatibility
-            enable_batchmatmul_unfold=True,  # for end-to-end model compatibility
+            input_onnx_file_path=f_onnx,  # Path to the ONNX file
+            output_folder_path=str(f),  # Path to save the converted model
+            not_use_onnxsim=True,  # Disable onnx-simplifier
+            verbosity="error",  # Log only errors
+            output_integer_quantized_tflite=self.args.int8,  # INT8 conversion
+            quant_type="per-tensor",  # Quantization type (per-tensor or per-channel)
+            custom_input_op_name_np_data_path=np_data,  # Custom input data path (if needed)
+            disable_group_convolution=True,  # Disable group convolutions for compatibility
+            enable_batchmatmul_unfold=True,  # Enable batch matmul unfolding
         )
         yaml_save(f / "metadata.yaml", self.metadata)  # add metadata.yaml
 
@@ -1465,7 +1465,7 @@ class Exporter:
         # 4. Pipeline models together
         pipeline = ct.models.pipeline.Pipeline(
             input_features=[
-                ("image", ct.models.datatypes.Array(4, ny, nx)),
+                ("image", ct.models.datatypes.Array(5, ny, nx)),
                 ("iouThreshold", ct.models.datatypes.Double()),
                 ("confidenceThreshold", ct.models.datatypes.Double()),
             ],
